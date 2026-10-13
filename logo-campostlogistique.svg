@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+<title id="title">CAMPOSTLOGISTIQUE</title><desc id="desc">Logo de courrier et de trajet postal</desc>
+<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#14b8a6"/><stop offset="1" stop-color="#0f766e"/></linearGradient></defs>
+<rect x="3" y="3" width="122" height="122" rx="29" fill="url(#bg)"/>
+<path d="M25 43 Q25 36 33 36 H80 Q88 36 88 44 V78 Q88 85 80 85 H33 Q25 85 25 78Z" fill="#fff" opacity=".98"/>
+<path d="M27 42 L56.5 64 L86 42" fill="none" stroke="#0f766e" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M70 91 C79 80 91 75 98 63 C103 54 99 44 90 41" fill="none" stroke="#ffedd5" stroke-width="5" stroke-linecap="round" stroke-dasharray="4 7"/>
+<circle cx="91" cy="37" r="13" fill="#f97316" stroke="#fff" stroke-width="4"/>
+<circle cx="91" cy="37" r="4" fill="#fff"/>
+<path d="M39 99 H66" stroke="#fff" stroke-width="5" stroke-linecap="round" opacity=".9"/>
+</svg>
