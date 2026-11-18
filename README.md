@@ -48,3 +48,6 @@ Voir `GUIDE_V40_SEPARATION_DONNEES.md`.
 
 ## V41 — Espaces collectifs
 Voir `GUIDE_V41_ESPACES_PIECES_JOINTES.md`.
+
+## V43 — Traduction et gros fichiers
+Voir `GUIDE_V43_TRADUCTION_ET_GROS_FICHIERS.md`.
