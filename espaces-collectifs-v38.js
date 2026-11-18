@@ -1,4 +1,4 @@
-/* DELTA SCHOOL V38 — Espaces collectifs (classe / catégorie) et messagerie parent ↔ groupe/enseignants.
+/* DELTA SCHOOL V41 (module des espaces collectifs, ex-V38) — Espaces collectifs (classe / catégorie) et messagerie parent ↔ groupe/enseignants.
  *
  *  1. Le super administrateur regroupe plusieurs élèves d'une même classe ou catégorie (groupe de répétition, classe,
  *     section, système, étudiants, élèves sans groupe) dans UN espace de la plateforme. Il y partage des éléments (cours,
@@ -91,7 +91,7 @@
     var sp = mySp(id), r = sp && role(sp); if (!sp || sp.status !== 'ouvert' || !r || r === 'parent') return;
     var t = val('gs_msg'), l = (r === 'eleve') ? '' : val('gs_link'), title = val('gs_ititle'), kind = val('gs_ikind') || 'autre', item = !!asItem && r !== 'eleve';
     if (r === 'eleve' && sp.locked) return alert('La discussion est verrouillée par le super administrateur.');
-    if (l && !/^https?:\/\/\S+$/i.test(l)) return alert('Le lien doit commencer par http:// ou https://');
+    if (l && !(r === 'eleve' ? /^https:\/\/[^\s\/]+\.[^\s\/]+\S*$/i : /^https?:\/\/\S+$/i).test(l)) return alert(r === 'eleve' ? 'Le lien doit commencer par https:// (exemple : un lien Google Drive ou YouTube).' : 'Le lien doit commencer par http:// ou https://');
     if (item && !title) return alert('Donnez un titre à l’élément partagé (ex. Épreuve de maths).'); if (!t && !l) return alert('Écrivez un message' + (r === 'eleve' ? '' : ' ou ajoutez un lien') + '.');
     S.grpSpaceMsgs.push({ id: nid(arr('grpSpaceMsgs')), space: sp.id, from: me.id, text: t, link: l, item: item, title: item ? title : '', kind: item ? kind : '', ts: now() });
     if (item) sp.students.forEach(function (i) { var u = U(i); if (u && u.noLogin) parentsOf(u).forEach(function (p) { notify(p.id, '📌 Nouvel élément dans l’espace « ' + sp.title + ' » : ' + title); }); });
@@ -99,6 +99,162 @@
   };
   window.dsV38Back = function () { GS.open = 0; render(); };
   window.dsV38OpenSpace = function (id) { GS.open = id; render(); };
+
+  /* ====================== V41 : pièces jointes, corrections, mode silencieux, blocage, « écrit… » ====================== */
+  var X = { att: null, busy: false, rec: null, recT: 0, recI: 0, tAt: 0 }, BL = {}, MAXB = { image: 2e6, audio: 2.5e6, video: 3e6, doc: 3e6 };
+  function prefOf(sp) { return arr('grpSpacePrefs').filter(function (p) { return p.space == sp.id && p.uid == me.id; })[0]; }
+  function isSilent(sp) { var p = prefOf(sp); return !!(p && p.silent) && role(sp) === 'eleve'; }
+  function isBlocked(sp) { return role(sp) !== 'super' && (sp.blocked || []).indexOf(me.id) >= 0; }
+  function ko(n) { return n >= 1e6 ? (n / 1e6).toFixed(1) + ' Mo' : Math.max(1, Math.round(n / 1e3)) + ' Ko'; }
+  function msgById(id) { return arr('grpSpaceMsgs').filter(function (m) { return m.id == id; })[0]; }
+  function attHtml(m) {
+    var a = m.att; if (!a) return ''; var f = Number(a.fid);
+    if (a.kind === 'image') return '<div><img data-fid="' + f + '" alt="' + E(a.name) + '" onclick="dsV41Zoom(this)" style="max-width:100%;max-height:320px;border-radius:10px;background:rgba(127,127,127,.15);min-height:60px"></div>';
+    if (a.kind === 'audio') return '<div>🎤 Message vocal<br><audio data-fid="' + f + '" controls preload="none" style="width:100%"></audio></div>';
+    if (a.kind === 'video') return '<div><video data-fid="' + f + '" controls playsinline preload="metadata" style="max-width:100%;max-height:320px;border-radius:10px;background:#000"></video></div>';
+    return '<div><a href="#" data-fid="' + f + '" data-name="' + E(a.name) + '" onclick="return dsV41Open(this)">📄 ' + E(a.name) + ' · ' + ko(a.size || 0) + '</a></div>';
+  }
+  function chatHtml(sp, chat) {
+    var all = msgsOf(sp.id), fixed = {}; all.forEach(function (m) { if (m.corr && m.replyTo) fixed[m.replyTo] = 1; });
+    return chat.map(function (m) {
+      var mineM = m.from == me.id, u = U(m.from) || {}, o = m.corr && m.replyTo ? msgById(m.replyTo) : null;
+      var bg = m.corr ? 'background:rgba(34,197,94,.12);border-left:4px solid #22c55e;border-radius:10px;padding:6px' : (mineM ? 'background:rgba(20,163,143,.08);border-radius:10px;padding:6px' : 'padding:6px');
+      return '<div class="row" style="align-items:flex-start;' + bg + '"><span style="display:flex;gap:8px;align-items:flex-start;width:100%">' + av(m.from, 34) + '<span style="min-width:0;flex:1"><b>' + E(u.name || '?') + '</b> <span class="mu">' + E(RL[u.role] || '') + '</span>'
+        + (m.corr ? ' <span class="tag">✅ Correction</span>' : '') + (fixed[m.id] ? ' <span class="tag">✅ Corrigé</span>' : '')
+        + (o ? '<div class="mu" style="border-left:3px solid #94a3b8;padding-left:6px;margin:3px 0">↪ ' + E((U(o.from) || {}).name || '?') + ' : ' + E(String(o.text || (o.att ? 'pièce jointe' : '')).slice(0, 80)) + '</div>' : '')
+        + (m.text ? '<div style="white-space:pre-wrap;overflow-wrap:anywhere">' + E(m.text) + '</div>' : '') + attHtml(m)
+        + (m.link ? '<div style="overflow-wrap:anywhere"><a href="' + E(m.link) + '" target="_blank" rel="noopener noreferrer" onclick="return dsV42Link(this)">🔗 ' + E(m.link) + '</a></div>' : '') + '<div class="mu">' + E(m.ts || '') + '</div></span></span></div>';
+    }).join('') || '<div class="mu" style="margin-top:6px">Aucun message pour le moment.</div>';
+  }
+  /* pièces jointes : chargement avec le jeton de connexion, puis affichage local */
+  function getBlob(fid) {
+    if (BL[fid]) return Promise.resolve(BL[fid]); var io = window.dsIO; if (!io || !io.token()) return Promise.resolve(null);
+    return fetch(io.api + '/spaceio?action=file&id=' + fid, { headers: { Authorization: 'Bearer ' + io.token() }, cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.blob() : null; }).then(function (b) { return b ? (BL[fid] = URL.createObjectURL(b)) : null; }).catch(function () { return null; });
+  }
+  function hydrate() {
+    Array.prototype.forEach.call(document.querySelectorAll('[data-fid]:not([data-ok])'), function (el) {
+      el.setAttribute('data-ok', '1');
+      getBlob(el.getAttribute('data-fid')).then(function (u) {
+        if (u) { if (el.tagName !== 'A') el.src = u; } else setTimeout(function () { el.removeAttribute('data-ok'); }, 8000);
+      });
+    });
+  }
+  var hyT = 0; try { new MutationObserver(function () { clearTimeout(hyT); hyT = setTimeout(hydrate, 120); }).observe(document.body, { childList: true, subtree: true }); } catch (e) {}
+  window.dsV42Link = function (a) { return confirm('Vous quittez DELTA SCHOOL pour ouvrir un site externe :\n' + (a.hostname || a.href) + '\n\nN’ouvrez que les liens de personnes de confiance. Continuer ?'); };
+  window.dsV42Links = function (id) {
+    if (!isSuper()) return; var sp = mySp(id); if (!sp) return; sp.noLinks = !sp.noLinks;
+    S.grpSpaceMsgs.push({ id: nid(S.grpSpaceMsgs), space: sp.id, from: me.id, text: sp.noLinks ? '🔗 Le partage de liens par les élèves est suspendu.' : '🔗 Les élèves peuvent partager des liens (fichiers volumineux).', link: '', ts: now() });
+    L((sp.noLinks ? 'Liens des élèves suspendus : ' : 'Liens des élèves autorisés : ') + sp.title); save(); render();
+  };
+  window.dsV41Zoom = function (img) { if (img && img.src) window.open(img.src, '_blank'); };
+  window.dsV41Open = function (a) {
+    var name = a.getAttribute('data-name') || 'document'; getBlob(a.getAttribute('data-fid')).then(function (u) {
+      if (!u) return alert('Fichier indisponible pour le moment.'); var l = document.createElement('a'); l.href = u; l.target = '_blank'; l.download = name; document.body.appendChild(l); l.click(); l.remove();
+    }); return false;
+  };
+  /* envoi d'un fichier */
+  function attChip() { var el = document.getElementById('gs_att'); if (!el) return; el.innerHTML = X.busy ? '⏳ Envoi du fichier…' : (X.att ? '📎 ' + E(X.att.name) + ' (' + ko(X.att.size) + ') <a href="#" onclick="return dsV41Unatt()">✕ retirer</a>' : ''); }
+  window.dsV41Unatt = function () { X.att = null; attChip(); return false; };
+  function up(blob, name, mime) {
+    var sp = GS.open && mySp(GS.open); if (!sp || !window.dsIO) return alert('Connexion au serveur indisponible.');
+    X.busy = true; attChip(); var fr = new FileReader();
+    fr.onload = function () {
+      var b64 = String(fr.result).split(',')[1] || '';
+      window.dsIO.call('POST', '/spaceio?action=upload', { space: sp.id, name: name, mime: mime, data: b64 }).then(function (r) {
+        X.busy = false;
+        if (r.ok && r.j.ok) X.att = { fid: r.j.fid, kind: r.j.kind, name: r.j.name, mime: r.j.mime, size: r.j.size }; else if (r.status === 413) tooBig('Fichier', blob.size); else alert((r.j && r.j.error) || 'Envoi impossible (vérifiez votre connexion).');
+        attChip();
+      });
+    };
+    fr.onerror = function () { X.busy = false; attChip(); alert('Fichier illisible.'); }; fr.readAsDataURL(blob);
+  }
+  function shrink(file, cb) {
+    var img = new Image(), u = URL.createObjectURL(file);
+    img.onload = function () { var k = Math.min(1, 1280 / Math.max(img.width, img.height)), c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(u); c.toBlob(cb, 'image/jpeg', 0.72); };
+    img.onerror = function () { URL.revokeObjectURL(u); cb(null); }; img.src = u;
+  }
+  function tooBig(what, size) {
+    var sp = GS.open && mySp(GS.open), can = sp && !sp.noLinks;
+    alert(what + ' trop lourd (' + ko(size) + ', maximum 3 Mo).' + (can ? '\n\nEnvoyez plutôt un lien : mettez le fichier sur Google Drive, YouTube ou un autre site, activez le partage « toute personne disposant du lien », puis collez le lien dans le champ « 🔗 Lien ».' : '\n\nRéduisez le fichier ou filmez une séquence plus courte.'));
+    var el = document.getElementById('gs_link'); if (can && el) { try { el.focus(); } catch (e) {} }
+  }
+  window.dsV41File = function (input, kind) {
+    var f = input.files && input.files[0]; input.value = ''; try { input.blur(); } catch (e) {} if (!f) return;
+    if (kind === 'image') return shrink(f, function (b) { if (!b) return alert('Photo illisible. Choisissez une photo JPEG ou PNG.'); up(b, (f.name || 'photo').replace(/\.[^.]+$/, '') + '.jpg', 'image/jpeg'); });
+    var mime = f.type || (/\.pdf$/i.test(f.name) ? 'application/pdf' : /\.docx$/i.test(f.name) ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : /\.doc$/i.test(f.name) ? 'application/msword' : '');
+    if (kind === 'doc' && !/^application\/(pdf|msword|vnd\.openxmlformats-officedocument\.wordprocessingml\.document)$/.test(mime)) return alert('Seuls les fichiers PDF ou Word (.doc, .docx) sont acceptés.');
+    if (f.size > MAXB[kind]) return tooBig(kind === 'video' ? 'Vidéo' : 'Fichier', f.size);
+    up(f, f.name || 'fichier', mime);
+  };
+  window.dsV41Pick = function (id) { var el = document.getElementById(id); if (el) el.click(); };
+  function recBtn(sec) { var b = document.getElementById('gs_rec'); if (b) b.textContent = X.rec ? '⏹ Arrêter (' + (sec || 0) + ' s)' : '🎤 Vocal'; }
+  window.dsV41Rec = function () {
+    if (X.rec) { X.rec.stop(); return; }
+    if (!navigator.mediaDevices || !window.MediaRecorder) return alert('L’enregistrement vocal n’est pas pris en charge sur cet appareil.');
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+      var ch = [], opt = { audioBitsPerSecond: 24000 }; try { if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) opt.mimeType = 'audio/webm;codecs=opus'; } catch (e) {}
+      var mr = new MediaRecorder(stream, opt); X.rec = mr; X.recT = Date.now();
+      mr.ondataavailable = function (e) { if (e.data && e.data.size) ch.push(e.data); };
+      mr.onstop = function () { stream.getTracks().forEach(function (t) { t.stop(); }); clearInterval(X.recI); X.rec = null; recBtn(); var type = String(mr.mimeType || 'audio/webm').split(';')[0]; if (ch.length) up(new Blob(ch, { type: type }), 'vocal.' + (type.indexOf('mp4') >= 0 ? 'm4a' : 'webm'), type); };
+      mr.start(); recBtn(0); X.recI = setInterval(function () { var s = Math.round((Date.now() - X.recT) / 1000); recBtn(s); if (s >= 120) mr.stop(); }, 500);
+    }).catch(function () { alert('Autorisez le micro pour enregistrer un message vocal.'); });
+  };
+  /* indicateur « X écrit… » et rafraîchissement rapide pendant qu'un espace est ouvert */
+  window.dsV41Typing = function (id) { if (Date.now() - X.tAt < 3000 || !window.dsIO) return; X.tAt = Date.now(); window.dsIO.call('POST', '/spaceio?action=typing', { space: id }); };
+  window.dsLiveUpdate = function () {
+    try { var el = document.getElementById('gs_chat'); if (!el || !GS.open) return; var sp = mySp(GS.open); if (!sp || isSilent(sp)) return; var par = el.parentNode, near = par.scrollHeight - par.scrollTop - par.clientHeight < 60 || true;
+      el.innerHTML = chatHtml(sp, msgsOf(sp.id).filter(function (m) { return !m.item; }).slice(-120)); setRead(sp); hydrate(); } catch (e) {}
+  };
+  setInterval(function () {
+    if (!GS.open || document.hidden || typeof me === 'undefined' || !me || !window.dsIO || !document.getElementById('gs_chat')) return;
+    var sp = mySp(GS.open); if (!sp) return; window.dsIO.pull();
+    window.dsIO.call('GET', '/spaceio?action=who&space=' + sp.id).then(function (r) {
+      var el = document.getElementById('gs_typing'); if (!el) return; var w = (r.j && r.j.who) || [];
+      el.textContent = w.length ? '✍️ ' + w.map(function (x) { return x.name; }).join(', ') + (w.length > 1 ? ' écrivent…' : ' écrit…') : '';
+    });
+  }, 3000);
+  /* mode silencieux (élève) : il ne voit plus la discussion, ne peut pas écrire ni quitter l'espace */
+  window.dsV41Silent = function (id, on) {
+    var sp = mySp(id); if (!sp || role(sp) !== 'eleve') return;
+    if (on && !confirm('Ne plus participer à la discussion ?\nVous ne verrez plus ce qui s’y dit et vous ne pourrez plus écrire. Vous ne pouvez pas quitter l’espace : seul le super administrateur peut vous retirer. Vous pouvez reprendre la discussion quand vous voulez.')) return;
+    var p = prefOf(sp); if (!p) { p = { id: nid(arr('grpSpacePrefs')), space: sp.id, uid: me.id, silent: !!on, ts: now() }; arr('grpSpacePrefs').push(p); } else { p.silent = !!on; p.ts = now(); }
+    save(); render();
+  };
+  /* blocage par le super administrateur : membres en lecture seule jusqu'à autorisation */
+  window.dsV41Block = function (id, uidv, on) {
+    if (!isSuper()) return; var sp = mySp(id), u = U(uidv); if (!sp || !u) return;
+    sp.blocked = (sp.blocked || []).filter(function (x) { return x != uidv; }); if (on) sp.blocked.push(uidv);
+    S.grpSpaceMsgs.push({ id: nid(S.grpSpaceMsgs), space: sp.id, from: me.id, text: on ? '🔇 ' + u.name + ' est en lecture seule (écriture bloquée par le super administrateur).' : '🔊 ' + u.name + ' peut de nouveau écrire.', link: '', ts: now() });
+    notify(uidv, on ? '🔇 Le super administrateur a mis votre écriture en pause dans l’espace « ' + sp.title + ' » : vous pouvez lire seulement.' : '🔊 Vous pouvez de nouveau écrire dans l’espace « ' + sp.title + ' ».');
+    L((on ? 'Écriture bloquée : ' : 'Écriture autorisée : ') + u.name + ' → ' + sp.title); save(); render();
+  };
+  window.dsV41BlockAll = function (id, on) {
+    if (!isSuper()) return; var sp = mySp(id); if (!sp) return;
+    if (on && !confirm('Mettre tous les membres en lecture seule ?')) return;
+    sp.blocked = on ? (sp.students || []).concat(sp.staff || []) : [];
+    S.grpSpaceMsgs.push({ id: nid(S.grpSpaceMsgs), space: sp.id, from: me.id, text: on ? '🔇 Tous les membres sont en lecture seule (décision du super administrateur).' : '🔊 Tous les membres peuvent de nouveau écrire.', link: '', ts: now() });
+    L((on ? 'Espace en lecture seule : ' : 'Espace réouvert à l’écriture : ') + sp.title); save(); render();
+  };
+  /* envoi d'un message : texte, pièce jointe, correction */
+  window.dsV38Send = function (id, asItem) {
+    var sp = mySp(id), r = sp && role(sp); if (!sp || sp.status !== 'ouvert' || !r || r === 'parent') return;
+    if (isBlocked(sp)) return alert('Le super administrateur a bloqué votre écriture : vous êtes en lecture seule.');
+    if (r === 'eleve' && isSilent(sp)) return alert('Vous êtes en mode silencieux.');
+    if (r === 'eleve' && sp.locked) return alert('La discussion est verrouillée par le super administrateur.');
+    if (X.busy) return alert('Envoi du fichier en cours, patientez un instant.');
+    var t = val('gs_msg'), l = (r === 'eleve' && sp.noLinks) ? '' : val('gs_link'), title = val('gs_ititle'), kind = val('gs_ikind') || 'autre', item = !!asItem && r !== 'eleve';
+    var corr = r !== 'eleve' && !!(document.getElementById('gs_corr') || {}).checked, rt = Number(val('gs_reply')) || 0, att = X.att;
+    if (l && !(r === 'eleve' ? /^https:\/\/[^\s\/]+\.[^\s\/]+\S*$/i : /^https?:\/\/\S+$/i).test(l)) return alert(r === 'eleve' ? 'Le lien doit commencer par https:// (exemple : un lien Google Drive ou YouTube).' : 'Le lien doit commencer par http:// ou https://');
+    if (item && !title) return alert('Donnez un titre à l’élément partagé (ex. Épreuve de maths).');
+    if (!t && !l && !att) return alert('Écrivez un message, ajoutez une pièce jointe' + (r === 'eleve' ? '.' : ' ou un lien.'));
+    var m = { id: nid(arr('grpSpaceMsgs')), space: sp.id, from: me.id, text: t, link: l, item: item, title: item ? title : '', kind: item ? kind : '', ts: now() };
+    if (att) m.att = att; if (corr) { m.corr = true; if (rt) m.replyTo = rt; }
+    S.grpSpaceMsgs.push(m); X.att = null;
+    if (corr && rt) { var o = msgById(rt); if (o && o.from != me.id && isSuper()) notify(o.from, '✅ Votre exercice a été corrigé dans l’espace « ' + sp.title + ' ».'); }
+    if (item) sp.students.forEach(function (i) { var u = U(i); if (u && u.noLogin) parentsOf(u).forEach(function (p) { notify(p.id, '📌 Nouvel élément dans l’espace « ' + sp.title + ' » : ' + title); }); });
+    save(); render();
+  };
 
   /* ---------------- affichages ---------------- */
   function staffCandidates(sp) {
@@ -116,17 +272,35 @@
     var h = '<div>' + btn('← Retour', 'dsV38Back()') + '</div><div class="card"><b>👥 ' + E(sp.title) + '</b> <span class="tag">' + (open ? '🟢 Ouvert' : '⚪ Terminé') + '</span>' + (sp.locked ? ' <span class="tag">🔒 Discussion verrouillée</span>' : '') + '<div class="mu">' + E(sp.category) + (sp.desc ? ' — ' + E(sp.desc) : '') + '</div>'
       + '<div style="margin-top:6px">' + who(sp.by) + (sp.staff || []).map(function (x) { return who(x); }).join('') + '</div><details style="margin-top:4px"><summary class="mu">' + sp.students.length + ' élève(s)</summary>' + sp.students.map(function (x) { return who(x, 24) + (su ? btn('✕', 'dsV38RemoveStudent(' + Number(sp.id) + ',' + Number(x) + ')') : ''); }).join('<br>') + '</details>' + (r === 'parent' ? '<div class="mu" style="margin-top:6px">👁 Vous suivez cet espace en lecture seule, car votre enfant en est membre.</div>' : '') + '</div>';
     h += '<div class="card"><b>📌 Éléments partagés (' + items.length + ')</b>' + (items.map(function (m) { var k = KIND[m.kind] || KIND.autre; return '<div class="row" style="align-items:flex-start"><span><b>' + k[0] + ' ' + E(m.title) + '</b> <span class="mu">' + k[1] + ' · ' + E((U(m.from) || {}).name || '') + ' · ' + E(m.ts) + '</span>' + (m.text ? '<div style="white-space:pre-wrap">' + E(m.text) + '</div>' : '') + (m.link ? '<div><a href="' + E(m.link) + '" target="_blank" rel="noopener noreferrer">🔗 Ouvrir</a></div>' : '') + '</span></div>'; }).join('') || '<div class="mu" style="margin-top:6px">Aucun élément partagé pour le moment.</div>') + '</div>';
-    h += '<div class="card"><b>💬 Discussion</b>' + (chat.map(function (m) {
-      var mineM = m.from == me.id, u = U(m.from) || {};
-      return '<div class="row" style="align-items:flex-start;' + (mineM ? 'background:rgba(20,163,143,.08);border-radius:10px;padding:6px' : 'padding:6px') + '"><span style="display:flex;gap:8px;align-items:flex-start">' + av(m.from, 34) + '<span><b>' + E(u.name || '?') + '</b> <span class="mu">' + E(RL[u.role] || '') + '</span><div style="white-space:pre-wrap">' + E(m.text || '') + '</div>' + (m.link ? '<div><a href="' + E(m.link) + '" target="_blank" rel="noopener noreferrer">🔗 ' + E(m.link) + '</a></div>' : '') + '<div class="mu">' + E(m.ts || '') + '</div></span></span></div>';
-    }).join('') || '<div class="mu" style="margin-top:6px">Aucun message pour le moment.</div>') + '</div>';
-    if (open && r && r !== 'parent') {
-      if (r === 'eleve' && sp.locked) h += '<div class="card mu">🔒 La discussion est verrouillée par le super administrateur.</div>';
-      else h += '<div class="card"><textarea id="gs_msg" rows="3" placeholder="Votre message…" style="width:100%;padding:10px;border:1px solid var(--bd);border-radius:10px;background:var(--bg);color:var(--tx)"></textarea>' + (r === 'eleve' ? '' : '<input id="gs_link" placeholder="Lien (facultatif) https://…"><div class="mu">Partager comme élément épinglé :</div><input id="gs_ititle" placeholder="Titre de l’élément (ex. Épreuve de maths)"><select id="gs_ikind">' + Object.keys(KIND).map(function (k) { return '<option value="' + k + '">' + KIND[k][0] + ' ' + KIND[k][1] + '</option>'; }).join('') + '</select>')
-        + '<button onclick="dsV38Send(' + Number(sp.id) + ',false)">Envoyer le message</button>' + (r === 'eleve' ? '' : ' <button onclick="dsV38Send(' + Number(sp.id) + ',true)">📌 Partager l’élément</button>') + '</div>';
+    var silentMe = r === 'eleve' && isSilent(sp), blockedMe = isBlocked(sp);
+    if (silentMe) {
+      h += '<div class="card"><b>🔕 Mode silencieux</b><div class="mu">Vous ne voyez pas la discussion et vous n’écrivez pas. Les éléments partagés restent visibles. Vous ne pouvez pas quitter cet espace : seul le super administrateur peut vous retirer.</div>' + btn('💬 Reprendre la discussion', 'dsV41Silent(' + Number(sp.id) + ',false)', 'p') + '</div>';
+    } else {
+      h += '<div class="card"><b>💬 Discussion</b><div id="gs_typing" class="mu" style="min-height:18px"></div><div id="gs_chat">' + chatHtml(sp, chat) + '</div>' + (r === 'eleve' ? '<div style="margin-top:8px">' + btn('🔕 Ne plus participer à la discussion', 'dsV41Silent(' + Number(sp.id) + ',true)') + '</div>' : '') + '</div>';
+    }
+    if (open && r && r !== 'parent' && !silentMe) {
+      if (blockedMe) h += '<div class="card mu">🔇 Lecture seule : le super administrateur a suspendu votre écriture. Vous pourrez écrire dès qu’il l’autorisera.</div>';
+      else if (r === 'eleve' && sp.locked) h += '<div class="card mu">🔒 La discussion est verrouillée par le super administrateur.</div>';
+      else {
+        var sid = Number(sp.id), cands = ms.filter(function (m) { return !m.item && !m.corr && (sp.students || []).indexOf(m.from) >= 0; }).slice(-30).reverse();
+        h += '<div class="card"><textarea id="gs_msg" rows="3" oninput="dsV41Typing(' + sid + ')" placeholder="Votre message…" style="width:100%;padding:10px;border:1px solid var(--bd);border-radius:10px;background:var(--bg);color:var(--tx)"></textarea>'
+          + '<div id="gs_att" class="mu"></div><div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0">'
+          + btn('📷 Photo', "dsV41Pick('gs_f_cam')") + btn('🖼️ Galerie', "dsV41Pick('gs_f_gal')") + btn('📄 PDF / Word', "dsV41Pick('gs_f_doc')")
+          + '<button class="s" id="gs_rec" style="padding:6px 10px;font-size:13px" onclick="dsV41Rec()">🎤 Vocal</button>' + btn('🎥 Vidéo', "dsV41Pick('gs_f_vid')") + '</div>'
+          + '<input type="file" id="gs_f_cam" accept="image/*" capture="environment" style="display:none" onchange="dsV41File(this,\'image\')">'
+          + '<input type="file" id="gs_f_gal" accept="image/*" style="display:none" onchange="dsV41File(this,\'image\')">'
+          + '<input type="file" id="gs_f_doc" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" style="display:none" onchange="dsV41File(this,\'doc\')">'
+          + '<input type="file" id="gs_f_vid" accept="video/*" capture="environment" style="display:none" onchange="dsV41File(this,\'video\')">'
+          + (r === 'eleve' ? (sp.noLinks ? '<div class="mu">🔗 Le partage de liens est suspendu dans cet espace.</div>' : '<input id="gs_link" placeholder="🔗 Fichier trop lourd ? Collez un lien https:// (Drive, YouTube…)"><div class="mu">Le lien doit être partagé en « toute personne disposant du lien » pour que tous puissent l’ouvrir.</div>') : '<label class="mu" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="gs_corr" style="width:auto;margin:0"> ✅ Ceci est une correction</label><select id="gs_reply"><option value="">Correction générale (non liée à un message)</option>' + cands.map(function (m) { return '<option value="' + Number(m.id) + '">' + E(((U(m.from) || {}).name || '?') + ' — ' + (m.att ? '📎 ' : '') + String(m.text || 'pièce jointe').slice(0, 40)) + '</option>'; }).join('') + '</select>'
+            + '<input id="gs_link" placeholder="Lien (facultatif) https://…"><div class="mu">Partager comme élément épinglé :</div><input id="gs_ititle" placeholder="Titre de l’élément (ex. Épreuve de maths)"><select id="gs_ikind">' + Object.keys(KIND).map(function (k) { return '<option value="' + k + '">' + KIND[k][0] + ' ' + KIND[k][1] + '</option>'; }).join('') + '</select>')
+          + '<button onclick="dsV38Send(' + sid + ',false)">Envoyer</button>' + (r === 'eleve' ? '' : ' <button onclick="dsV38Send(' + sid + ',true)">📌 Partager l’élément</button>') + '</div>';
+      }
     } else if (!open) h += '<div class="card mu">Cet espace est terminé : il n’accepte plus de messages.</div>';
     if (su) {
       var counts = {}; ms.forEach(function (m) { counts[m.from] = (counts[m.from] || 0) + 1; }); var act = sp.students.filter(function (x) { return counts[x]; }), silent = sp.students.filter(function (x) { return !counts[x]; });
+      var mem = (sp.students || []).concat(sp.staff || []), blk = sp.blocked || [], silentIds = arr('grpSpacePrefs').filter(function (p) { return p.space == sp.id && p.silent; }).map(function (p) { return p.uid; });
+      h += '<div class="card"><b>🔇 Qui peut écrire ?</b><div class="mu">Un membre bloqué devient lecteur : il voit tout mais n’écrit plus, jusqu’à ce que vous l’autorisiez. Vous seul pouvez bloquer.</div><div style="margin:6px 0">' + btn('🔇 Tout le monde en lecture seule', 'dsV41BlockAll(' + Number(sp.id) + ',true)') + ' ' + btn('🔊 Autoriser tout le monde', 'dsV41BlockAll(' + Number(sp.id) + ',false)', 'p') + ' ' + btn(sp.noLinks ? '🔗 Autoriser les liens des élèves' : '🔗 Suspendre les liens des élèves', 'dsV42Links(' + Number(sp.id) + ')') + '</div>'
+        + (mem.map(function (x) { var b = blk.indexOf(x) >= 0; return '<div class="row"><span>' + who(x, 24) + (b ? ' <span class="tag">🔇 lecture seule</span>' : '') + (silentIds.indexOf(x) >= 0 ? ' <span class="tag">🔕 silencieux</span>' : '') + '</span>' + btn(b ? '🔊 Autoriser' : '🔇 Bloquer', 'dsV41Block(' + Number(sp.id) + ',' + Number(x) + ',' + (b ? 'false' : 'true') + ')', b ? 'p' : 's') + '</div>'; }).join('') || '<div class="mu">Aucun membre.</div>') + '</div>';
       h += '<div class="card"><b>📊 Participation</b>' + kgrid([kpi('Élèves actifs', act.length + '/' + sp.students.length), kpi('Messages', ms.length), kpi('Éléments partagés', items.length)]) + (silent.length ? '<div class="mu">Pas encore intervenus : ' + silent.slice(0, 12).map(function (x) { return E((U(x) || {}).name || '?'); }).join(', ') + (silent.length > 12 ? '…' : '') + '</div>' : '') + '</div>';
       var cand = staffCandidates(sp).slice(0, 20);
       h += '<div class="card"><b>👨‍🏫 Ajouter un enseignant ou un répétiteur</b><div class="mu">Vous seul pouvez ajouter des intervenants. La liste montre ceux qui sont connectés (🟢) et leurs indicateurs de performance.</div>' + (cand.map(function (x) { return '<div class="row"><span style="display:flex;gap:8px;align-items:center">' + av(x.u.id, 34) + '<span><b>' + E(x.u.name) + '</b> <span class="mu">' + E(RL[x.u.role]) + '</span><div class="mu">' + (x.on ? '🟢 connecté' : '⚪ hors ligne') + ' · ' + E(x.perf) + (x.ok ? '' : ' · ⚠️ abonnement inactif') + '</div></span></span>' + btn('Ajouter', 'dsV38AddStaff(' + Number(sp.id) + ',' + Number(x.u.id) + ')', 'p') + '</div>'; }).join('') || '<div class="mu">Aucun enseignant ou répétiteur disponible.</div>') + '</div>';
