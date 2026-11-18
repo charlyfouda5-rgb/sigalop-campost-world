@@ -1,6 +1,7 @@
 'use strict';
 const crypto = require('crypto');
 const { neon } = require('@neondatabase/serverless');
+const SC = require('./_scope');
 
 /* ---------- accès PostgreSQL (Neon) ---------- */
 let _sql;
@@ -93,6 +94,7 @@ function phoneMatch(st, typed) {
 function publicState(state) { // visiteur non connecté : aucune donnée
   return {};
 }
+function view(state, auth) { return SC.view(clean(state), auth); } // V40 : chaque utilisateur ne reçoit que ses données
 function clean(state) { // jamais de mot de passe vers le navigateur
   const o = Object.assign({}, state);
   ['users', 'reqs'].forEach(k => { if (Array.isArray(o[k])) o[k] = o[k].map(r => { if (r && r.pw !== undefined) { r = Object.assign({}, r); delete r.pw; } return r; }); });
@@ -101,12 +103,21 @@ function clean(state) { // jamais de mot de passe vers le navigateur
 
 /* ---------- application des modifications envoyées par un appareil ---------- */
 const NOT_FOR_LEARNERS = ['schools', 'grades', 'classes', 'subjects', 'cfg', 'langs', 'rates', 'disc', 'dec', 'dismissals'];
+/* V42 : un lien partagé dans un espace doit être une adresse web valide (https pour les élèves), sans identifiants ni adresse IP */
+function linkOk(l, httpsOnly) {
+  if (typeof l !== 'string' || l.length > 500 || /\s/.test(l)) return false;
+  let u; try { u = new URL(l); } catch (e) { return false; }
+  if (u.protocol !== 'https:' && (httpsOnly || u.protocol !== 'http:')) return false;
+  if (u.username || u.password || !/\./.test(u.hostname) || /^[\d.]+$/.test(u.hostname) || u.hostname.indexOf(':') >= 0 || /^localhost$/i.test(u.hostname)) return false;
+  return true;
+}
 const SUPER_ONLY = ['cfg', 'langs', 'rates', 'shares', 'perfSnaps', 'suiviProgress', 'grpSpaces']; // 'shares' : contenus envoyés par le super administrateur
 const GUEST_KEYS = ['reqs', 'logs', 'users', 'schools', 'photos', 'reps', 'nums', 'acc', 'accessHistory']; // parcours d'activation d'un compte après validation
 async function applyOps(state, ops, auth) {
   const S = JSON.parse(JSON.stringify(state)), errs = [], role = auth ? auth.r : 'anon';
   const lowRole = ['eleve', 'parent', 'repetiteur'].indexOf(role) >= 0;
   const created = [];
+  const ws = SC.writeScope(S, auth);   // V40 : périmètre d'écriture (établissement de l'utilisateur)
   for (const op of (Array.isArray(ops) ? ops : [])) {
     if (!op || typeof op !== 'object') continue;
     const key = op.c || op.k; if (typeof key !== 'string' || /^__|constructor|prototype/.test(key)) continue;
@@ -118,6 +129,13 @@ async function applyOps(state, ops, auth) {
       if (lowRole && NOT_FOR_LEARNERS.indexOf(key) >= 0) { errs.push('refusé:' + key); continue; }
     }
     if (op.k !== undefined) { if (op.set !== undefined) S[key] = op.set; continue; }
+    const wsChk = (rec, i) => { // refuse d'écrire dans un autre établissement
+      if (!ws || !rec || typeof rec !== 'object') return true;
+      const other = x => x && x.school && String(x.school) !== ws.school;
+      if (SC.SCHOOL_WRITE_KEYS.indexOf(key) >= 0) return !(other(rec) || (i >= 0 && other(S[key][i])));
+      if (key === 'users') return !(i >= 0 ? other(S.users[i]) : (rec.school && rec.role !== 'super' && String(rec.school) !== ws.school && rec.role !== 'parent' && rec.role !== 'repetiteur'));
+      return true;
+    };
     if (!Array.isArray(S[key])) S[key] = [];
     if (Array.isArray(op.add)) { S[key] = S[key].concat(op.add.slice(0, 200)); if (S[key].length > 3000) S[key] = S[key].slice(-3000); }
     for (const rec of (Array.isArray(op.put) ? op.put : [])) {
@@ -129,11 +147,28 @@ async function applyOps(state, ops, auth) {
           if (!mine || (prev ? (prev.status !== rec.status || !sameMembers || prev.student !== rec.student) : (rec.status !== 'attente' || (rec.members || []).length))) { errs.push('refusé:repSpaces'); continue; }
         }
         if (lowRole && key === 'repSpaceMsgs' && rec && rec.from !== auth.u) { errs.push('refusé:repSpaceMsgs'); continue; }
-        /* V38 : espaces collectifs — message seulement par un membre, en son nom ; l'élève n'écrit que du texte, hors verrouillage. */
+        /* V38/V41 : espaces collectifs — message seulement par un membre, en son nom, hors verrouillage, blocage ou mode silencieux.
+           L'élève n'écrit ni lien ni élément épinglé ni correction ; les pièces jointes sont validées (type, taille déclarée). */
         if (key === 'grpSpaceMsgs' && auth.r !== 'super' && rec && typeof rec === 'object') {
           const gsp = (S.grpSpaces || []).find(x => x.id === rec.space);
           const isStu = !!gsp && (gsp.students || []).includes(auth.u), isStaff = !!gsp && (gsp.staff || []).includes(auth.u);
-          if (rec.from !== auth.u || !gsp || gsp.status !== 'ouvert' || (!isStu && !isStaff) || (isStu && !isStaff && (gsp.locked || rec.link || rec.item))) { errs.push('refusé:grpSpaceMsgs'); continue; }
+          const silent = isStu && (S.grpSpacePrefs || []).some(p => p.space === rec.space && p.uid === auth.u && p.silent);
+          const blocked = !!gsp && (gsp.blocked || []).includes(auth.u);
+          const prev = (S.grpSpaceMsgs || []).find(x => x.id === rec.id);
+          if (rec.from !== auth.u || !gsp || gsp.status !== 'ouvert' || (!isStu && !isStaff) || blocked || silent || (prev && prev.from !== auth.u)
+            || (isStu && !isStaff && (gsp.locked || rec.item || rec.corr || (rec.link && (gsp.noLinks || !linkOk(rec.link, true)))))
+            || (rec.link && !isStu && !linkOk(rec.link, false)) || (rec.text !== undefined && (typeof rec.text !== 'string' || rec.text.length > 3000))) { errs.push('refusé:grpSpaceMsgs'); continue; }
+          if (rec.att !== undefined) {
+            const a = rec.att;
+            if (!a || typeof a !== 'object' || !Number.isInteger(a.fid) || ['image', 'audio', 'video', 'doc'].indexOf(a.kind) < 0) { errs.push('refusé:pièce jointe'); continue; }
+            rec.att = { fid: a.fid, kind: a.kind, name: String(a.name || 'fichier').slice(0, 120), mime: String(a.mime || '').slice(0, 100), size: Number(a.size) || 0 };
+          }
+        }
+        /* V41 : préférence « mode silencieux » — chaque élève ne modifie que la sienne */
+        if (key === 'grpSpacePrefs' && auth.r !== 'super' && rec && typeof rec === 'object') {
+          const gsp = (S.grpSpaces || []).find(x => x.id === rec.space), prev = (S.grpSpacePrefs || []).find(x => x.id === rec.id);
+          if (rec.uid !== auth.u || !gsp || !(gsp.students || []).includes(auth.u) || (prev && prev.uid !== auth.u)) { errs.push('refusé:grpSpacePrefs'); continue; }
+          rec.silent = !!rec.silent;
         }
       if (!rec || typeof rec !== 'object' || typeof rec.id !== 'number') continue;
       const i = S[key].findIndex(x => x.id === rec.id);
@@ -164,12 +199,13 @@ async function applyOps(state, ops, auth) {
         delete rec.pw; if (key === 'users') delete rec.fromReq;
         if (i >= 0 && key === 'users' && S.users[i].role !== rec.role && role !== 'super' && role !== 'chef') rec.role = S.users[i].role;
       }
+      if (!wsChk(rec, i)) { errs.push('refusé:' + key + ' (autre établissement)'); continue; }
       if (i >= 0) S[key][i] = rec; else { S[key].push(rec); if (role === 'anon') created.push(rec.id); }
     }
     for (const id of (Array.isArray(op.del) ? op.del : [])) {
       if (role === 'anon' || role === 'guest') continue;
       const j = S[key].findIndex(x => x.id === id);
-      if (j >= 0) { if (key === 'users' && S.users[j].role === 'super') continue; if (lowRole && key !== 'convs' && key !== 'cm' && key !== 'msgs' && key !== 'dom') continue; S[key].splice(j, 1); }
+      if (j >= 0) { if (key === 'users' && S.users[j].role === 'super') continue; if (key === 'grpSpacePrefs' && role !== 'super' && S[key][j].uid !== auth.u) continue; if (key === 'grpSpaceMsgs' && role !== 'super' && S[key][j].from !== auth.u) continue; if (ws && SC.SCHOOL_WRITE_KEYS.concat(['users']).indexOf(key) >= 0 && S[key][j].school && String(S[key][j].school) !== ws.school) continue; if (lowRole && key !== 'convs' && key !== 'cm' && key !== 'msgs' && key !== 'dom') continue; S[key].splice(j, 1); }
     }
   }
   return { state: S, errs, created };
@@ -181,4 +217,4 @@ async function body(req) {
   let s = ''; for await (const c of req) { s += c; if (s.length > 4.2e6) throw new Error('Requête trop volumineuse'); }
   return s ? JSON.parse(s) : {};
 }
-module.exports = { repo, hashPw, checkPw, sign, verify, bearer, ensureState, envSuper, superFromEnv, phoneMatch, clean, publicState, applyOps, send, body };
+module.exports = { db, view, repo, hashPw, checkPw, sign, verify, bearer, ensureState, envSuper, superFromEnv, phoneMatch, clean, publicState, applyOps, send, body };

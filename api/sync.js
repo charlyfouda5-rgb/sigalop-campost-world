@@ -9,7 +9,7 @@ module.exports = async function handler(req, res) {
       if (!auth || auth.r === 'guest') return L.send(res, 401, { ok: false, error: 'Connexion requise.' });
       const since = Number((req.query && req.query.since) || new URL(req.url, 'http://x').searchParams.get('since') || 0);
       const { data, version } = await L.ensureState();
-      return L.send(res, 200, version === since ? { ok: true, changed: false, version } : { ok: true, changed: true, version, state: L.clean(data) });
+      return L.send(res, 200, version === since ? { ok: true, changed: false, version } : { ok: true, changed: true, version, state: L.view(data, auth) });
     }
     if (req.method !== 'POST') { res.setHeader('Allow', 'GET, POST'); return L.send(res, 405, { ok: false, error: 'Méthode non autorisée' }); }
     const b = await L.body(req), ops = Array.isArray(b.ops) ? b.ops : [];
@@ -20,7 +20,7 @@ module.exports = async function handler(req, res) {
       let version = cur.version;
       if (!same) { const nv = await L.repo.casState(r.state, cur.version); if (nv === null) continue; version = nv; }
       const out = { ok: true, version, errors: r.errs };
-      if (auth && auth.r !== 'guest') out.state = L.clean(r.state);
+      if (auth && auth.r !== 'guest') out.state = L.view(r.state, auth);
       if (!auth && r.created.length) out.guestToken = L.sign({ r: 'guest', q: r.created[0] }, 2);
       return L.send(res, 200, out);
     }
