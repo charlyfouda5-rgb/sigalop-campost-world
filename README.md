@@ -42,3 +42,9 @@ Voir `GUIDE_V38_ESPACES_COLLECTIFS_MESSAGERIE_PARENTS.md`.
 
 ## V39 — Variables du super administrateur
 Voir `GUIDE_V39_VARIABLES_SUPER_ADMIN.md` : `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_PASSWORD` et `SESSION_SECRET` donnent toujours accès au compte super administrateur.
+
+## V40 — Séparation des données par groupe
+Voir `GUIDE_V40_SEPARATION_DONNEES.md`.
+
+## V41 — Espaces collectifs
+Voir `GUIDE_V41_ESPACES_PIECES_JOINTES.md`.
