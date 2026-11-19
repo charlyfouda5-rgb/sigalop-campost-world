@@ -51,3 +51,9 @@ Voir `GUIDE_V41_ESPACES_PIECES_JOINTES.md`.
 
 ## V43 — Traduction et gros fichiers
 Voir `GUIDE_V43_TRADUCTION_ET_GROS_FICHIERS.md`.
+
+
+## V44 — Médias des espaces collectifs
+Voir `GUIDE_V44_MEDIAS_ESPACES_COLLECTIFS.md` et `backend/neon/migration_v44_media_bigint.sql`.
+
+Version du correctif : V44 — correction BIGINT des identifiants médias, préservation de lecture audio/vidéo et exclusion des réponses API privées du cache hors ligne.
